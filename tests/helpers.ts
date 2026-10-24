@@ -120,6 +120,8 @@ export class MemoryFs {
 export interface RecorderState {
   waterfalls: { event: string; target: unknown; exec: unknown }[]
   emits: { event: string; args: unknown[] }[]
+  /** Optional stand-in for a mounted policy: throw from here to reject one write intent. */
+  beforeWriteIntent?: (target: unknown) => void | Promise<void>
 }
 
 export interface TestRig {
@@ -146,6 +148,9 @@ export function makeRig(overrides?: Partial<ResolvedConfig>, files?: Record<stri
 
   const waterfall = async (event: string, target: unknown, exec: unknown, next: () => unknown) => {
     recorder.waterfalls.push({ event, target, exec })
+    if (event === 'fs/write-intent' && recorder.beforeWriteIntent !== undefined) {
+      await recorder.beforeWriteIntent(target)
+    }
     return next()
   }
   const emit = (event: string, ...args: unknown[]) => {

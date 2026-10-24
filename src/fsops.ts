@@ -34,23 +34,50 @@ function warnFsShapeOnce(detail: string): void {
   console.warn(`[dsh-patch-edit-plus] falling back to plain fs writes on this host line (${detail}); the read-before-write intent gate is unavailable.`)
 }
 
+/** A write intent fetched ahead of the write phase, plus how to use it. */
+export interface WriteIntent {
+  /** true when this host implements the 5-param `writeText` + write-intent waterfall. */
+  dance: boolean
+  intent: unknown
+}
+
+/**
+ * Fetch one write intent WITHOUT writing. Exposed so the apply phase can settle
+ * every gate (the observation policy's read-before-write check fires here)
+ * before the first byte of a multi-file patch is written.
+ * @throws {@link PatchError} code `IO` when the gate rejects the target.
+ */
+export async function resolveWriteIntent(ctx: Context, exec: ToolRunContext, target: FsTarget): Promise<WriteIntent> {
+  try {
+    const writeText = ctx.fs.writeText.bind(ctx.fs) as unknown as { length: number }
+    if (writeText.length !== 2 && typeof ctx.waterfall === 'function') {
+      return { dance: true, intent: await ctx.waterfall('fs/write-intent', target, exec, () => undefined) }
+    }
+    return { dance: false, intent: undefined }
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'PatchError') throw error
+    throw ioError(`failed to write "${target.displayPath}"`, error)
+  }
+}
+
 export async function writeFile(
   ctx: Context,
   exec: ToolRunContext,
   target: FsTarget,
   content: string,
   sandboxPolicy: SandboxExecutionPolicy | undefined,
+  prefetched?: WriteIntent,
 ): Promise<FsWriteOutcome> {
   try {
     const writeText = ctx.fs.writeText.bind(ctx.fs) as unknown as
       | ((t: FsTarget, c: string, i: unknown, s: AbortSignal, p: SandboxExecutionPolicy | undefined) => Promise<FsWriteOutcome>)
       | ((t: FsTarget, c: string) => Promise<FsWriteOutcome>)
+    const gate = prefetched ?? await resolveWriteIntent(ctx, exec, target)
     // 5 参意图舞（write-intent + observed 事件）只在实现了它的代上走；判定取等：仅当形参恰为 2（老线签名）才降级直写——stub/新线的
     // mock length 常为 0，取等避免误伤意图舞。
-    if (writeText.length !== 2 && typeof ctx.waterfall === 'function') {
-      const intent = await ctx.waterfall('fs/write-intent', target, exec, () => undefined)
+    if (gate.dance) {
       const outcome = await (writeText as (t: FsTarget, c: string, i: unknown, s: AbortSignal, p: SandboxExecutionPolicy | undefined) => Promise<FsWriteOutcome>)(
-        target, content, intent, exec.signal, sandboxPolicy)
+        target, content, gate.intent, exec.signal, sandboxPolicy)
       if (typeof ctx.emit === 'function') {
         ctx.emit('fs/observed', target, { kind: 'present', version: outcome.version }, exec)
       }

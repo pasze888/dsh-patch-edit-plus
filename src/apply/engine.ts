@@ -12,7 +12,8 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { ResolvedConfig } from '../config.js'
 import { PatchError, addExistsError, mismatchMessage, missingFileError } from '../errors.js'
-import { readFile, statFile, writeFile } from '../fsops.js'
+import { readFile, resolveWriteIntent, statFile, writeFile } from '../fsops.js'
+import type { WriteIntent } from '../fsops.js'
 import { moveFile, removeFile, assertShellReady } from '../shellops.js'
 import type { Hunk, PatchLine } from '../parse/types.js'
 import { consumedLines, findSequence } from './seek.js'
@@ -26,6 +27,14 @@ export interface VerifiedChange {
   before: string | null
   /** Computed new content; `null` for deletes. */
   after: string | null
+}
+
+/** True when this change actually writes file content; deletes and pure moves do not. */
+function needsWrite(change: VerifiedChange): boolean {
+  const { op } = change.entry
+  if (op.kind === 'add') return true
+  if (op.kind === 'delete') return false
+  return change.after !== null && change.after !== change.before
 }
 
 /**
@@ -61,8 +70,19 @@ export async function verifyPatch(ctx: Context, exec: ToolRunContext, plan: Plan
   return changes
 }
 
-/** Apply phase: writes only — verify already settled every decision. */
+/**
+ * Apply phase: writes only — verify already settled every decision.
+ *
+ * Every write intent is fetched BEFORE the first mutation: the read-before-write
+ * gate lives in that waterfall, so settling it inside the write loop would let
+ * the files earlier in the patch land before a later file is rejected.
+ */
 export async function applyPatch(ctx: Context, exec: ToolRunContext, changes: readonly VerifiedChange[], cfg: ResolvedConfig, sandboxPolicy: SandboxExecutionPolicy | undefined): Promise<void> {
+  const intents = new Map<VerifiedChange, WriteIntent>()
+  for (const change of changes) {
+    if (needsWrite(change)) intents.set(change, await resolveWriteIntent(ctx, exec, change.entry.target))
+  }
+
   for (const change of changes) {
     const { op } = change.entry
     if (op.kind === 'delete') {
@@ -70,11 +90,11 @@ export async function applyPatch(ctx: Context, exec: ToolRunContext, changes: re
       continue
     }
     if (op.kind === 'add') {
-      await writeFile(ctx, exec, change.entry.target, change.after ?? '', sandboxPolicy)
+      await writeFile(ctx, exec, change.entry.target, change.after ?? '', sandboxPolicy, intents.get(change))
       continue
     }
-    if (change.after !== null && change.after !== change.before) {
-      await writeFile(ctx, exec, change.entry.target, change.after, sandboxPolicy)
+    if (needsWrite(change)) {
+      await writeFile(ctx, exec, change.entry.target, change.after as string, sandboxPolicy, intents.get(change))
     }
     if (change.entry.moveToTarget !== undefined && op.kind === 'update') {
       await moveFile(ctx, exec, cfg, change.entry.target, change.entry.moveToTarget, sandboxPolicy)

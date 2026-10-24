@@ -56,6 +56,36 @@ describe('atomicity (mutation tests)', () => {
     await expect(rig.runTool('--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-x\n+y\n')).rejects.toMatchObject({ code: 'IO', message: /disk on fire/ })
   })
 
+  it('a write-intent gate rejection leaves every file byte-identical', async () => {
+    const files = {
+      'gate-one.txt': 'aaa\n',
+      'gate-two.txt': 'bbb\n',
+    }
+    const rig = makeRig(undefined, files)
+    const snapshot = new Map(rig.fs.files)
+    // Models the observation policy: gate-two was never read in this session, gate-one was.
+    rig.recorder.beforeWriteIntent = (target) => {
+      if ((target as { targetKey: string }).targetKey === '/work/gate-two.txt') {
+        throw new Error('cannot overwrite existing "/work/gate-two.txt" without reading it first')
+      }
+    }
+    const patch = [
+      '--- a/gate-one.txt',
+      '+++ b/gate-one.txt',
+      '@@ -1,1 +1,2 @@',
+      ' aaa',
+      '+second',
+      '--- a/gate-two.txt',
+      '+++ b/gate-two.txt',
+      '@@ -1,1 +1,2 @@',
+      ' bbb',
+      '+second',
+    ].join('\n')
+    await expect(rig.runTool(patch)).rejects.toMatchObject({ code: 'IO', message: /without reading it first/ })
+    expect([...rig.fs.files]).toEqual([...snapshot])
+    expect(rig.fs.writeCalls).toHaveLength(0)
+  })
+
   it('an aborted signal fails fast', async () => {
     const rig = makeRig(undefined, { 'a.txt': 'x\n' })
     const controller = new AbortController()
