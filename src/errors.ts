@@ -181,3 +181,13 @@ export function ioError(what: string, cause: unknown): PatchError {
   const detail = cause instanceof Error ? cause.message : String(cause)
   return new PatchError('IO', `${what}: ${detail}`)
 }
+
+/**
+ * IO error for a write the observation policy will not let through: the session
+ * never read the file, so the provider's guarded create would be refused. Carries
+ * the provider's own wording so the message does not depend on whether the
+ * refusal was caught before or during the write phase.
+ */
+export function writeNotObservedError(path: string): PatchError {
+  return new PatchError('IO', `failed to write "${path}": cannot overwrite existing "${path}" without reading it first`)
+}

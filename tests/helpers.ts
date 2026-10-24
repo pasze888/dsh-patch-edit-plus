@@ -68,7 +68,6 @@ export class MemoryFs {
   }
 
   async writeText(target: { targetKey: string }, content: string, expected?: unknown, signal?: AbortSignal, sandboxPolicy?: unknown): Promise<{ operation: 'create' | 'update'; version: string; before: string | null; after: string }> {
-    void expected
     if (signal?.aborted === true) throw new Error('FS_ABORTED: signal aborted')
     if (this.failNextWrite !== null) {
       const error = this.failNextWrite
@@ -76,6 +75,12 @@ export class MemoryFs {
       throw error
     }
     const before = this.files.get(target.targetKey) ?? null
+    // Mirrors the provider: a guarded create refuses a target that already exists,
+    // which is how an unread file is denied when the policy answers createIfAbsent.
+    const kind = (expected as { kind?: string } | undefined)?.kind
+    if (kind === 'createIfAbsent' && before !== null) {
+      throw new Error(`cannot overwrite existing "${target.targetKey}" without reading it first`)
+    }
     this.writeCalls.push({ key: target.targetKey, content, intent: expected, signal, sandboxPolicy })
     this.files.set(target.targetKey, content)
     return { operation: before === null ? 'create' : 'update', version: `v:${Date.now()}`, before, after: content }
@@ -120,8 +125,12 @@ export class MemoryFs {
 export interface RecorderState {
   waterfalls: { event: string; target: unknown; exec: unknown }[]
   emits: { event: string; args: unknown[] }[]
-  /** Optional stand-in for a mounted policy: throw from here to reject one write intent. */
-  beforeWriteIntent?: (target: unknown) => void | Promise<void>
+  /**
+   * Optional stand-in for a mounted observation policy: return the intent one
+   * write sees. `{ kind: 'createIfAbsent' }` models a file the session never read,
+   * which the provider then refuses.
+   */
+  writeIntentFor?: (target: unknown) => unknown
 }
 
 export interface TestRig {
@@ -148,8 +157,8 @@ export function makeRig(overrides?: Partial<ResolvedConfig>, files?: Record<stri
 
   const waterfall = async (event: string, target: unknown, exec: unknown, next: () => unknown) => {
     recorder.waterfalls.push({ event, target, exec })
-    if (event === 'fs/write-intent' && recorder.beforeWriteIntent !== undefined) {
-      await recorder.beforeWriteIntent(target)
+    if (event === 'fs/write-intent' && recorder.writeIntentFor !== undefined) {
+      return recorder.writeIntentFor(target)
     }
     return next()
   }

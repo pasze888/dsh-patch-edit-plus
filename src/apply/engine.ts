@@ -11,7 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { ResolvedConfig } from '../config.js'
-import { PatchError, addExistsError, mismatchMessage, missingFileError } from '../errors.js'
+import { PatchError, addExistsError, mismatchMessage, missingFileError, writeNotObservedError } from '../errors.js'
 import { readFile, resolveWriteIntent, statFile, writeFile } from '../fsops.js'
 import type { WriteIntent } from '../fsops.js'
 import { moveFile, removeFile, assertShellReady } from '../shellops.js'
@@ -35,6 +35,19 @@ function needsWrite(change: VerifiedChange): boolean {
   if (op.kind === 'add') return true
   if (op.kind === 'delete') return false
   return change.after !== null && change.after !== change.before
+}
+
+/**
+ * Reject a write the provider is certain to refuse, while nothing is written yet.
+ *
+ * An update targets a file verify just read, so an intent of `createIfAbsent`
+ * means the session never observed it: the provider's guarded create would fail
+ * with `FS_NOT_OBSERVED`. An add is exempt — its target is known absent.
+ */
+function assertWriteAllowed(change: VerifiedChange, gate: WriteIntent): void {
+  if (change.entry.op.kind === 'add') return
+  const intent = gate.intent as { kind?: unknown } | undefined
+  if (intent?.kind === 'createIfAbsent') throw writeNotObservedError(change.entry.target.displayPath)
 }
 
 /**
@@ -73,14 +86,19 @@ export async function verifyPatch(ctx: Context, exec: ToolRunContext, plan: Plan
 /**
  * Apply phase: writes only — verify already settled every decision.
  *
- * Every write intent is fetched BEFORE the first mutation: the read-before-write
- * gate lives in that waterfall, so settling it inside the write loop would let
- * the files earlier in the patch land before a later file is rejected.
+ * Every write is checked against its intent BEFORE the first mutation. The
+ * observation policy does not throw for an unread file: it answers
+ * `createIfAbsent`, and the provider then refuses the guarded create because the
+ * file exists. Settling only the waterfall would let the files earlier in the
+ * patch land before that refusal, so the provider's precondition is mirrored here.
  */
 export async function applyPatch(ctx: Context, exec: ToolRunContext, changes: readonly VerifiedChange[], cfg: ResolvedConfig, sandboxPolicy: SandboxExecutionPolicy | undefined): Promise<void> {
   const intents = new Map<VerifiedChange, WriteIntent>()
   for (const change of changes) {
-    if (needsWrite(change)) intents.set(change, await resolveWriteIntent(ctx, exec, change.entry.target))
+    if (!needsWrite(change)) continue
+    const intent = await resolveWriteIntent(ctx, exec, change.entry.target)
+    assertWriteAllowed(change, intent)
+    intents.set(change, intent)
   }
 
   for (const change of changes) {

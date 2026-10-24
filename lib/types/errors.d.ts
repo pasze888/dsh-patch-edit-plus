@@ -76,4 +76,11 @@ interface MismatchInput {
 export declare function mismatchMessage(input: MismatchInput): string;
 /** IO error wrapping a backend failure. */
 export declare function ioError(what: string, cause: unknown): PatchError;
+/**
+ * IO error for a write the observation policy will not let through: the session
+ * never read the file, so the provider's guarded create would be refused. Carries
+ * the provider's own wording so the message does not depend on whether the
+ * refusal was caught before or during the write phase.
+ */
+export declare function writeNotObservedError(path: string): PatchError;
 export {};

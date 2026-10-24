@@ -29,9 +29,11 @@ export declare function verifyPatch(ctx: Context, exec: ToolRunContext, plan: Pl
 /**
  * Apply phase: writes only — verify already settled every decision.
  *
- * Every write intent is fetched BEFORE the first mutation: the read-before-write
- * gate lives in that waterfall, so settling it inside the write loop would let
- * the files earlier in the patch land before a later file is rejected.
+ * Every write is checked against its intent BEFORE the first mutation. The
+ * observation policy does not throw for an unread file: it answers
+ * `createIfAbsent`, and the provider then refuses the guarded create because the
+ * file exists. Settling only the waterfall would let the files earlier in the
+ * patch land before that refusal, so the provider's precondition is mirrored here.
  */
 export declare function applyPatch(ctx: Context, exec: ToolRunContext, changes: readonly VerifiedChange[], cfg: ResolvedConfig, sandboxPolicy: SandboxExecutionPolicy | undefined): Promise<void>;
 /** Pure-move entries (update with moveTo and no hunks) skip the write. */
