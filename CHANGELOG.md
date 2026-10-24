@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `apply_patch` no longer rejects paths outside the workspace when the session runs with full access; the containment fence is now lifted by the mode itself instead of always applying.
+- A multi-file patch rejected by the read-before-write gate no longer leaves the files before the rejected one written: every write intent is settled before the first byte is written.
+
 ## 0.4.3 (2026-10-18)
 
 - hosts: 追加 0.2.1-rc.2 声明面枚举（34/34 @deepseek-ai/* 宿主 peer 逐包 npm 实测 rc.2 在版；本插件不触 ctx.web provider 与 conversation.input.model.label 槽，代码零改动，纯元数据发版；农场 rc.2 格挂账待命）
