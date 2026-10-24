@@ -26,7 +26,13 @@ export interface VerifiedChange {
  * result. Throws on the first failure — nothing has been written.
  */
 export declare function verifyPatch(ctx: Context, exec: ToolRunContext, plan: PlannedPatch, cfg: ResolvedConfig): Promise<VerifiedChange[]>;
-/** Apply phase: writes only — verify already settled every decision. */
+/**
+ * Apply phase: writes only — verify already settled every decision.
+ *
+ * Every write intent is fetched BEFORE the first mutation: the read-before-write
+ * gate lives in that waterfall, so settling it inside the write loop would let
+ * the files earlier in the patch land before a later file is rejected.
+ */
 export declare function applyPatch(ctx: Context, exec: ToolRunContext, changes: readonly VerifiedChange[], cfg: ResolvedConfig, sandboxPolicy: SandboxExecutionPolicy | undefined): Promise<void>;
 /** Pure-move entries (update with moveTo and no hunks) skip the write. */
 export declare function isPureMove(change: VerifiedChange): boolean;

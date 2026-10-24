@@ -16,7 +16,20 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import type { FsInfo, FsTarget, FsWriteOutcome } from '@deepseek-ai/dsh-fs';
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox';
-export declare function writeFile(ctx: Context, exec: ToolRunContext, target: FsTarget, content: string, sandboxPolicy: SandboxExecutionPolicy | undefined): Promise<FsWriteOutcome>;
+/** A write intent fetched ahead of the write phase, plus how to use it. */
+export interface WriteIntent {
+    /** true when this host implements the 5-param `writeText` + write-intent waterfall. */
+    dance: boolean;
+    intent: unknown;
+}
+/**
+ * Fetch one write intent WITHOUT writing. Exposed so the apply phase can settle
+ * every gate (the observation policy's read-before-write check fires here)
+ * before the first byte of a multi-file patch is written.
+ * @throws {@link PatchError} code `IO` when the gate rejects the target.
+ */
+export declare function resolveWriteIntent(ctx: Context, exec: ToolRunContext, target: FsTarget): Promise<WriteIntent>;
+export declare function writeFile(ctx: Context, exec: ToolRunContext, target: FsTarget, content: string, sandboxPolicy: SandboxExecutionPolicy | undefined, prefetched?: WriteIntent): Promise<FsWriteOutcome>;
 /** Read one file's text (whole file). */
 export declare function readFile(ctx: Context, exec: ToolRunContext, target: FsTarget): Promise<string>;
 /** Stat one resolved target; `undefined` when absent. */
