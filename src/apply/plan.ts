@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import { tmpdir } from 'node:os'
 import type { ResolvedConfig } from '../config.js'
 import {
   duplicatePathError,
@@ -54,22 +55,25 @@ export async function buildPlan(ctx: Context, exec: ToolRunContext, parsed: Pars
   const cwd = sandboxPolicy?.workspaceRoot ?? exec.agent?.session.header.cwd
   const resolveOpts = { cwd, signal: exec.signal }
 
-  // Containment root: the fencing root when the call carries a policy, else the
-  // session workspace. Mirrors the native write/edit tools' resolve options.
-  // Full access removes the containment fence, not the cwd used for relative paths.
-  // Keep the conservative workspace fence when no policy service is mounted.
-  const rootTarget = cwd === undefined || sandboxPolicy?.mode === 'danger-full-access'
-    ? undefined
-    : await fs.resolve(cwd, resolveOpts)
+  // Containment roots: the roots the call's own sandbox policy may write under,
+  // or the session workspace when no policy service is mounted. Resolving them
+  // through `ctx.fs` canonicalizes exactly the way the enforcing backend does
+  // (`/tmp` is `/private/tmp` on darwin), so this fence and the provider agree.
+  const rootPaths = writableRootCandidates(sandboxPolicy, cwd)
+  const rootTargets: FsTarget[] = []
+  for (const rootPath of rootPaths) {
+    const resolved = await fs.resolve(rootPath, resolveOpts)
+    if (!rootTargets.some(root => root.targetKey === resolved.targetKey)) rootTargets.push(resolved)
+  }
 
   const seen = new Map<string, string>()
 
   const entries: PlannedEntry[] = []
   for (const op of parsed.ops) {
-    const target = await resolveChecked(fs, op.path, resolveOpts, rootTarget, cfg, seen)
+    const target = await resolveChecked(fs, op.path, resolveOpts, rootTargets, cfg, seen)
     let moveToTarget: FsTarget | undefined
     const moveTo = op.kind === 'update' ? op.moveTo : undefined
-    if (moveTo !== undefined) moveToTarget = await resolveChecked(fs, moveTo, resolveOpts, rootTarget, cfg, seen)
+    if (moveTo !== undefined) moveToTarget = await resolveChecked(fs, moveTo, resolveOpts, rootTargets, cfg, seen)
     if (op.kind === 'add') await checkParent(fs, op.path, resolveOpts)
     entries.push({ op, target, moveToTarget })
   }
@@ -77,17 +81,37 @@ export async function buildPlan(ctx: Context, exec: ToolRunContext, parsed: Pars
   return { format: parsed.format, entries }
 }
 
+/**
+ * The paths one call may write under — the same meaning the sandbox's own fence
+ * derives: `workspace-write` is "the workspace root plus the platform temp
+ * areas", `danger-full-access` fences nothing, and `read-only` grants nothing
+ * beyond the workspace (the provider then denies the write itself).
+ *
+ * @deepseek-ai/dsh-sandbox exports this derivation as `writableRoots()` for
+ * every enforcement dialect precisely so that "the write tool cannot write /tmp
+ * but bash can" asymmetries cannot arise. This plugin is loaded as a peer of
+ * many host generations (some predate that export), so the three-root meaning is
+ * restated here rather than imported at runtime; it is a stable definition, and
+ * the containment comparison stays authoritative in the provider.
+ */
+function writableRootCandidates(policy: SandboxExecutionPolicy | undefined, fallbackRoot: string | undefined): string[] {
+  if (policy === undefined) return fallbackRoot === undefined ? [] : [fallbackRoot]
+  if (policy.mode === 'danger-full-access') return []
+  if (policy.mode === 'read-only') return [policy.workspaceRoot]
+  return [policy.workspaceRoot, '/tmp', tmpdir()]
+}
+
 /** Resolve one path with containment + symlink policy and duplicate tracking. */
 async function resolveChecked(
   fs: ResolveServices,
   path: string,
   resolveOpts: { cwd?: string; signal?: AbortSignal },
-  rootTarget: FsTarget | undefined,
+  rootTargets: readonly FsTarget[],
   cfg: ResolvedConfig,
   seen: Map<string, string>,
 ): Promise<FsTarget> {
   const target = await fs.resolve(path, resolveOpts)
-  if (rootTarget !== undefined && !fs.contains(rootTarget, target)) throw pathEscapeError(path)
+  if (rootTargets.length > 0 && !rootTargets.some(root => fs.contains(root, target))) throw pathEscapeError(path)
   if (!cfg.followSymlinks) await rejectSymlinks(fs, path, resolveOpts)
   const previous = seen.get(target.targetKey)
   if (previous !== undefined) throw duplicatePathError(path)

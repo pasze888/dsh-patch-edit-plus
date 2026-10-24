@@ -44,4 +44,22 @@ describe('path safety (mutation tests)', () => {
     await rig.runTool(patch)
     expect(rig.fs.files.get('/work/real.txt')).toBe('y\n')
   })
+
+  it('workspace-write permits the platform temp area, exactly like the sandbox fence', async () => {
+    const rig = makeRig(undefined, { '/tmp/probe.txt': 'x\n' }, { resolve: () => ({ mode: 'workspace-write', workspaceRoot: '/work' }) })
+    const patch = '--- /tmp/probe.txt\n+++ /tmp/probe.txt\n@@ -1,1 +1,1 @@\n-x\n+y\n'
+    await rig.runTool(patch)
+    expect(rig.fs.files.get('/tmp/probe.txt')).toBe('y\n')
+  })
+
+  it('workspace-write still rejects a path outside every granted root, with zero writes', async () => {
+    const rig = makeRig(undefined, { '/work/a.txt': 'x\n' }, { resolve: () => ({ mode: 'workspace-write', workspaceRoot: '/work' }) })
+    const patch = [
+      '--- a/a.txt', '+++ b/a.txt', '@@ -1,1 +1,1 @@', '-x', '+y',
+      '--- /elsewhere/b.txt', '+++ /elsewhere/b.txt', '@@ -1,1 +1,1 @@', '-a', '+b',
+    ].join('\n')
+    await expect(rig.runTool(patch)).rejects.toMatchObject({ code: 'VALIDATION', message: /escapes/ })
+    expect(rig.fs.files.get('/work/a.txt')).toBe('x\n')
+    expect(rig.fs.writeCalls).toHaveLength(0)
+  })
 })

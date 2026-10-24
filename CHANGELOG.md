@@ -5,6 +5,7 @@
 ### Fixed
 
 - `apply_patch` no longer rejects paths outside the workspace when the session runs with full access; the containment fence is now lifted by the mode itself instead of always applying.
+- `apply_patch` now accepts the same paths the native `edit`/`write` tools accept under `workspace-write`: the fence follows the sandbox's own derivation (workspace root plus the platform temp areas) instead of measuring everything against the workspace root alone, so `/tmp` is writable again.
 - A multi-file patch rejected by the read-before-write gate no longer leaves the files before the rejected one written: every write intent is settled before the first byte is written.
 
 ## 0.4.3 (2026-10-18)
