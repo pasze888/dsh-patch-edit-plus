@@ -56,19 +56,19 @@ describe('atomicity (mutation tests)', () => {
     await expect(rig.runTool('--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-x\n+y\n')).rejects.toMatchObject({ code: 'IO', message: /disk on fire/ })
   })
 
-  it('a write-intent gate rejection leaves every file byte-identical', async () => {
+  it('a write the observation policy refuses leaves every file byte-identical', async () => {
     const files = {
       'gate-one.txt': 'aaa\n',
       'gate-two.txt': 'bbb\n',
     }
     const rig = makeRig(undefined, files)
     const snapshot = new Map(rig.fs.files)
-    // Models the observation policy: gate-two was never read in this session, gate-one was.
-    rig.recorder.beforeWriteIntent = (target) => {
-      if ((target as { targetKey: string }).targetKey === '/work/gate-two.txt') {
-        throw new Error('cannot overwrite existing "/work/gate-two.txt" without reading it first')
-      }
-    }
+    // gate-two was never read in this session, so the policy answers createIfAbsent
+    // and the provider's guarded create refuses it. gate-one is observed.
+    rig.recorder.writeIntentFor = (target) =>
+      (target as { targetKey: string }).targetKey === '/work/gate-two.txt'
+        ? { kind: 'createIfAbsent' }
+        : { kind: 'replaceIfVersion', version: 'v:test' }
     const patch = [
       '--- a/gate-one.txt',
       '+++ b/gate-one.txt',
