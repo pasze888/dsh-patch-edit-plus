@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.7] — 2026-11-02 (personal build on `compat-legacy`)
+
+### Fixed
+
+- **`apply_patch` inherits the calling session's sandbox policy.** The planner resolved no policy, so in a `danger-full-access` session paths outside the session workspace were still rejected by the containment fence, and the denial named the path instead of the missing policy.
+- **Workspace containment is fenced by the policy's writable roots**, not by the workspace alone: a wider session mode is honored, a narrower one still enforces the real root.
+- **Every write intent is settled before the first mutation.** A provider refusal on a later file used to leave earlier files written; the provider's `createIfAbsent` refusal is now mirrored up front, so a rejected patch leaves zero bytes behind.
+
+### Changed
+
+- devDependencies: `@deepseek-ai/cosmokit` declared for the `Volatile` type import (pnpm's isolated linking does not hoist that transitive dependency of `cordis`).
+
 0.4.4: host enumeration addendum for DSH 0.2.1-rc.3 (declaration-only bump; contract plane zero diff).
 
 ## 0.4.3 (2026-10-18)
